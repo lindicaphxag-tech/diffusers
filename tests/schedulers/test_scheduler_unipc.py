@@ -257,6 +257,20 @@ class UniPCMultistepSchedulerTest(SchedulerCommonTest):
 
                     assert sample.dtype == torch.float16
 
+    def test_default_dtype_float64(self):
+        default_dtype = torch.get_default_dtype()
+        torch.set_default_dtype(torch.float64)
+        try:
+            sample = self.full_loop(solver_order=3)
+        finally:
+            torch.set_default_dtype(default_dtype)
+
+        result_mean = torch.mean(torch.abs(sample))
+        reference_mean = torch.mean(torch.abs(self.full_loop(solver_order=3)))
+
+        assert sample.dtype == torch.float64
+        assert abs(result_mean.item() - reference_mean.item()) < 1e-3
+
     def test_full_loop_with_noise(self):
         scheduler_class = self.scheduler_classes[0]
         scheduler_config = self.get_scheduler_config()
