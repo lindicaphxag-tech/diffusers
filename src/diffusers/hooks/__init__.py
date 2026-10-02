@@ -28,5 +28,6 @@ if is_torch_available():
     from .sea_cache import SeaCacheConfig, apply_sea_cache
     from .smoothed_energy_guidance_utils import SmoothedEnergyGuidanceConfig
     from .taylorseer_cache import TaylorSeerCacheConfig, apply_taylorseer_cache
+    from .tea_cache import TeaCacheConfig, apply_tea_cache
     from .tensor_parallel import apply_tensor_parallel
     from .text_kv_cache import TextKVCacheConfig, apply_text_kv_cache
