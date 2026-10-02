@@ -21,9 +21,11 @@ import torch
 import torch.nn as nn
 
 from ... import __version__
-from ...utils import is_accelerate_available, is_kernels_available, is_kernels_version
+from ...utils import is_accelerate_available, is_kernels_available, is_kernels_version, logging
 from ...utils.constants import DIFFUSERS_TRUST_REMOTE_KERNELS
 
+
+logger = logging.get_logger(__name__)
 
 if is_accelerate_available():
     import accelerate
@@ -50,6 +52,46 @@ if can_use_cuda_kernels and is_kernels_available():
     ops = get_kernel("Isotr0py/ggml", user_agent={"diffusers": __version__}, **trust_kwargs)
 else:
     ops = None
+
+# ggml's published GEMV kernel handles only small flattened row counts. Diffusion
+# transformer activations are often much larger, so this is deliberately a narrow
+# fast path with the existing Diffusers implementation as fallback.
+GGML_GEMV_MAX_ROWS = 8
+_ggml_quantization_kernel = None
+
+
+class GGMLQuantizationKernel:
+    def __init__(self, module):
+        self.mul_mat_vec = module.mul_mat_vec
+        self.gemv_types = module.GEMV_TYPES
+
+    def supports(self, quant_type: int) -> bool:
+        return int(quant_type) in self.gemv_types
+
+
+def get_ggml_quantization_kernel():
+    """Return the official ggml quantization kernel, or False when unavailable."""
+    global _ggml_quantization_kernel
+
+    if _ggml_quantization_kernel is not None:
+        return _ggml_quantization_kernel
+    if not is_kernels_available():
+        _ggml_quantization_kernel = False
+        return _ggml_quantization_kernel
+
+    try:
+        from kernels import get_kernel
+
+        module = get_kernel("ggml-org/ggml-quantization", version=1)
+        _ggml_quantization_kernel = GGMLQuantizationKernel(module)
+    except Exception as error:
+        logger.info(
+            f"Official ggml quantization kernel is unavailable ({error}); "
+            "falling back to Diffusers' existing GGUF path."
+        )
+        _ggml_quantization_kernel = False
+    return _ggml_quantization_kernel
+
 
 UNQUANTIZED_TYPES = {gguf.GGMLQuantizationType.F32, gguf.GGMLQuantizationType.F16, gguf.GGMLQuantizationType.BF16}
 STANDARD_QUANT_TYPES = {
@@ -604,9 +646,29 @@ class GGUFLinear(nn.Linear):
         self.device = device
 
     def forward(self, inputs: torch.Tensor):
+        if inputs.device.type != "cpu" and self.weight.device.type != "cpu":
+            flat_rows = inputs.numel() // self.in_features
+            if flat_rows <= GGML_GEMV_MAX_ROWS:
+                kernel = get_ggml_quantization_kernel()
+                quant_type = getattr(self.weight, "quant_type", None)
+                if kernel is not False and quant_type is not None and kernel.supports(quant_type):
+                    return self.forward_ggml_kernel(inputs, kernel)
+
         if ops is not None and self.weight.is_cuda and inputs.is_cuda:
             return self.forward_cuda(inputs)
         return self.forward_native(inputs)
+
+    def forward_ggml_kernel(self, inputs: torch.Tensor, kernel: GGMLQuantizationKernel):
+        quant_type = self.weight.quant_type
+        flat = inputs.reshape(-1, self.in_features).to(self.compute_dtype)
+        packed_weight = self.weight.as_tensor()
+        output = kernel.mul_mat_vec(packed_weight, flat, int(quant_type), self.out_features)
+        if hasattr(output, "as_tensor"):
+            output = output.as_tensor()
+        if self.bias is not None:
+            output = output + self.bias.to(device=output.device, dtype=output.dtype)
+        output = output.reshape(*inputs.shape[:-1], self.out_features)
+        return output.to(self.compute_dtype)
 
     def forward_native(self, inputs: torch.Tensor):
         weight = dequantize_gguf_tensor(self.weight)
