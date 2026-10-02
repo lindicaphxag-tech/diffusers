@@ -267,9 +267,9 @@ class TestQwenImage21Rope:
         frame_index, height_index, width_index = self._reference_indices(img_shapes, image_pad_mask)
         expected = torch.cat(
             [
-                rope.freqs[0][frame_index],
-                rope.freqs[1][height_index],
-                rope.freqs[2][width_index],
+                rope.frame_freqs[frame_index],
+                rope.height_freqs[height_index],
+                rope.width_freqs[width_index],
             ],
             dim=-1,
         )
