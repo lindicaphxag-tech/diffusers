@@ -256,13 +256,16 @@ class QwenImageEditInpaintPipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
             return_tensors="pt",
         ).to(device)
 
-        outputs = self.text_encoder(
-            input_ids=model_inputs["input_ids"],
-            attention_mask=model_inputs["attention_mask"],
-            pixel_values=model_inputs.get("pixel_values"),
-            image_grid_thw=model_inputs.get("image_grid_thw"),
-            output_hidden_states=True,
-        )
+        forward_kwargs = {
+            "input_ids": model_inputs["input_ids"],
+            "attention_mask": model_inputs["attention_mask"],
+            "pixel_values": model_inputs.get("pixel_values"),
+            "image_grid_thw": model_inputs.get("image_grid_thw"),
+        }
+        if "mm_token_type_ids" in model_inputs:
+            forward_kwargs["mm_token_type_ids"] = model_inputs["mm_token_type_ids"]
+
+        outputs = self.text_encoder(**forward_kwargs, output_hidden_states=True)
 
         hidden_states = outputs.hidden_states[-1]
         split_hidden_states = self._extract_masked_hidden(hidden_states, model_inputs["attention_mask"])

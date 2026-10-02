@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest import mock
+
 import pytest
 import torch
 from PIL import Image
@@ -144,6 +146,21 @@ class TestQwenImageEditPipeline(QwenImageEditPipelineTesterConfig, PipelineTeste
         generated_slice = generated_image.flatten()
         generated_slice = torch.cat([generated_slice[:8], generated_slice[-8:]])
         assert_tensors_close(generated_slice, expected_slice, atol=5e-3)
+
+    def test_mm_token_type_ids_are_forwarded_to_text_encoder(self):
+        pipe = self.pipeline_class(**self.get_dummy_components()).to(torch_device)
+        inputs = self.get_dummy_inputs()
+
+        text_encoder_forward = pipe.text_encoder.forward
+        with mock.patch.object(pipe.text_encoder, "forward", wraps=text_encoder_forward) as forward:
+            pipe._get_qwen_prompt_embeds(
+                prompt=inputs["prompt"],
+                image=inputs["image"],
+                device=torch_device,
+            )
+
+        assert "mm_token_type_ids" in forward.call_args.kwargs
+        assert forward.call_args.kwargs["mm_token_type_ids"] is not None
 
     def test_inference_batch_single_identical(self):
         super().test_inference_batch_single_identical(batch_size=3, expected_max_diff=1e-1)
