@@ -28,6 +28,7 @@ class CacheMixin:
         - [Pyramid Attention Broadcast](https://huggingface.co/papers/2408.12588)
         - [FasterCache](https://huggingface.co/papers/2410.19355)
         - [FirstBlockCache](https://github.com/chengzeyi/ParaAttention/blob/7a266123671b55e7e5a2fe9af3121f07a36afc78/README.md#first-block-cache-our-dynamic-caching)
+        - [TeaCache](https://huggingface.co/papers/2411.19108)
         - [SeaCache](https://huggingface.co/papers/2602.18993)
     """
 
@@ -42,11 +43,12 @@ class CacheMixin:
         Enable caching techniques on the model.
 
         Args:
-            config (`PyramidAttentionBroadcastConfig | FasterCacheConfig | FirstBlockCacheConfig | SeaCacheConfig | TextKVCacheConfig`):
+            config (`PyramidAttentionBroadcastConfig | FasterCacheConfig | FirstBlockCacheConfig | TeaCacheConfig | SeaCacheConfig | TextKVCacheConfig`):
                 The configuration for applying the caching technique. Currently supported caching techniques are:
                     - [`~hooks.PyramidAttentionBroadcastConfig`]
                     - [`~hooks.FasterCacheConfig`]
                     - [`~hooks.FirstBlockCacheConfig`]
+                    - [`~hooks.TeaCacheConfig`]
                     - [`~hooks.SeaCacheConfig`]
                     - [`~hooks.TextKVCacheConfig`]
 
