@@ -90,6 +90,9 @@ class UNet3DConditionModel(ModelMixin, AttentionMixin, ConfigMixin, UNet2DCondit
         num_attention_heads (`int`, *optional*): The number of attention heads.
         time_cond_proj_dim (`int`, *optional*, defaults to `None`):
             The dimension of `cond_proj` layer in the timestep embedding.
+        num_class_embeds (`int`, *optional*, defaults to `None`):
+            Input dimension of an optional learnable class embedding. When set, `class_labels` are embedded and
+            added to the timestep embeddings.
     """
 
     _supports_gradient_checkpointing = False
@@ -124,6 +127,7 @@ class UNet3DConditionModel(ModelMixin, AttentionMixin, ConfigMixin, UNet2DCondit
         attention_head_dim: int | tuple[int] = 64,
         num_attention_heads: int | tuple[int] | None = None,
         time_cond_proj_dim: int | None = None,
+        num_class_embeds: int | None = None,
     ):
         super().__init__()
 
@@ -176,6 +180,9 @@ class UNet3DConditionModel(ModelMixin, AttentionMixin, ConfigMixin, UNet2DCondit
             time_embed_dim,
             act_fn=act_fn,
             cond_proj_dim=time_cond_proj_dim,
+        )
+        self.class_embedding = (
+            nn.Embedding(num_class_embeds, time_embed_dim) if num_class_embeds is not None else None
         )
 
         self.transformer_in = TransformerTemporalModel(
@@ -567,6 +574,11 @@ class UNet3DConditionModel(ModelMixin, AttentionMixin, ConfigMixin, UNet2DCondit
         t_emb = t_emb.to(dtype=self.dtype)
 
         emb = self.time_embedding(t_emb, timestep_cond)
+        if self.class_embedding is not None:
+            if class_labels is None:
+                raise ValueError("class_labels should be provided when num_class_embeds > 0")
+            emb = emb + self.class_embedding(class_labels).to(dtype=emb.dtype)
+
         emb = emb.repeat_interleave(num_frames, dim=0, output_size=emb.shape[0] * num_frames)
         encoder_hidden_states = encoder_hidden_states.repeat_interleave(
             num_frames, dim=0, output_size=encoder_hidden_states.shape[0] * num_frames
