@@ -91,8 +91,8 @@ class UNet3DConditionModel(ModelMixin, AttentionMixin, ConfigMixin, UNet2DCondit
         time_cond_proj_dim (`int`, *optional*, defaults to `None`):
             The dimension of `cond_proj` layer in the timestep embedding.
         num_class_embeds (`int`, *optional*, defaults to `None`):
-            Input dimension of an optional learnable class embedding. When set, `class_labels` are embedded and
-            added to the timestep embeddings.
+            Input dimension of the learnable embedding matrix to be projected to `time_embed_dim`, when performing
+            class conditioning.
     """
 
     _supports_gradient_checkpointing = False
