@@ -677,37 +677,38 @@ class QwenImage21Rope(nn.Module):
     def forward(
         self, img_shapes: list[tuple[int, int, int]], image_pad_mask: torch.Tensor, device: torch.device
     ) -> torch.Tensor:
-        self.freqs = [freq.to(device) for freq in self.freqs]
+        freqs = [freq.to(device) for freq in self.freqs]
+        image_pad_mask = image_pad_mask.to(device=device, dtype=torch.bool)
 
-        frame_index, height_index, width_index = [], [], []
-        image_height_index, image_width_index = [], []
-        cursor, position = 0, 0
-        total_len = image_pad_mask.shape[-1]
-        is_image_token = image_pad_mask.tolist()
+        # Build frame positions without materializing the token mask as a Python list. Text tokens advance by one.
+        # An image block keeps one frame position for all its tokens, then advances by max(height, width).
+        image_ordinal = image_pad_mask.long().cumsum(dim=0)
+        block_sizes = torch.tensor([height * width for _, height, width in img_shapes], device=device)
+        block_ends = block_sizes.cumsum(dim=0)
+        block_steps = torch.tensor([max(height, width) for _, height, width in img_shapes], device=device)
 
+        is_block_end = image_ordinal[:, None].eq(block_ends[None, :]) & image_pad_mask[:, None]
+        image_steps = (is_block_end.long() * block_steps[None, :]).sum(dim=1)
+        position_steps = (~image_pad_mask).long() + image_steps
+        frame_index = position_steps.cumsum(dim=0) - position_steps
+
+        image_height_index = []
+        image_width_index = []
         for _, height, width in img_shapes:
-            block_start = is_image_token.index(True, cursor)
-            text_len = block_start - cursor
-            frame_index.extend(range(position, position + text_len))
-            position += text_len
+            image_height_index.append(
+                torch.arange(-(height - height // 2), height // 2, device=device).repeat_interleave(width)
+            )
+            image_width_index.append(
+                torch.arange(-(width - width // 2), width // 2, device=device).repeat(height)
+            )
 
-            cursor = block_start + height * width
-            frame_index.extend([position] * (height * width))
-            position += max(height, width)
+        image_height_index = torch.cat(image_height_index)
+        image_width_index = torch.cat(image_width_index)
+        image_index = (image_ordinal - 1).clamp_min(0)
+        height_index = torch.where(image_pad_mask, image_height_index[image_index], frame_index)
+        width_index = torch.where(image_pad_mask, image_width_index[image_index], frame_index)
 
-            image_height_index.extend([h for h in range(-(height - height // 2), height // 2) for _ in range(width)])
-            image_width_index.extend([w for _ in range(height) for w in range(-(width - width // 2), width // 2)])
-
-        if cursor < total_len:
-            frame_index.extend(range(position, position + total_len - cursor))
-
-        frame_index = torch.tensor(frame_index, dtype=torch.long, device=device)
-        height_index = frame_index.clone()
-        width_index = frame_index.clone()
-        height_index[image_pad_mask] = torch.tensor(image_height_index, dtype=torch.long, device=device)
-        width_index[image_pad_mask] = torch.tensor(image_width_index, dtype=torch.long, device=device)
-
-        return torch.cat([self.freqs[0][frame_index], self.freqs[1][height_index], self.freqs[2][width_index]], dim=-1)
+        return torch.cat([freqs[0][frame_index], freqs[1][height_index], freqs[2][width_index]], dim=-1)
 
 
 class QwenImage21Transformer2DModel(
