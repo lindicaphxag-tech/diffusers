@@ -91,6 +91,29 @@ class TestUNet3DConditionModel(UNet3DConditionModelTesterConfig, ModelTesterMixi
 
         assert output.shape == self.get_dummy_inputs()["sample"].shape, "Input and output shapes do not match"
 
+    def test_class_conditioning(self):
+        init_dict = self.get_init_dict()
+        init_dict["num_class_embeds"] = 2
+        model = self.model_class(**init_dict).to(torch_device).eval()
+
+        inputs = self.get_dummy_inputs()
+        batch_size = inputs["sample"].shape[0]
+        labels_0 = torch.zeros(batch_size, dtype=torch.long, device=torch_device)
+        labels_1 = torch.ones(batch_size, dtype=torch.long, device=torch_device)
+
+        with torch.no_grad():
+            output_0 = model(**inputs, class_labels=labels_0).sample
+            output_1 = model(**inputs, class_labels=labels_1).sample
+
+        assert not torch.equal(output_0, output_1)
+
+        try:
+            model(**inputs)
+        except ValueError as error:
+            assert "class_labels should be provided" in str(error)
+        else:
+            raise AssertionError("Expected class-conditioned UNet3D to require class_labels")
+
     def test_feed_forward_chunking(self):
         init_dict = self.get_init_dict()
         init_dict["block_out_channels"] = (32, 64)
