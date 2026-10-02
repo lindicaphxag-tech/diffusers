@@ -53,6 +53,25 @@ image = pipe(prompt, generator=torch.manual_seed(0)).images[0]
 image.save("flux-gguf.png")
 ```
 
+## Using packed ggml kernels with GGUF
+
+Diffusers can optionally use the `ggml-org/ggml-quantization` kernels directly on packed GGUF weights. This path
+requires `kernels>=0.17.0` and works on supported CUDA and MPS devices:
+
+```shell
+pip install -U "kernels>=0.17.0"
+export DIFFUSERS_GGUF_KERNELS=true
+```
+
+The fused `mul_mat_vec` kernel is selected only when the flattened linear input contains at most 8 rows and the
+active backend implements the weight's GGUF quantization type. This is intentionally shape-aware: diffusion
+transformers often process hundreds or thousands of image/text tokens at once, where the ggml GEMV kernel is not
+applicable. Larger calls and unsupported quantization types continue through the existing GGUF path.
+
+This backend reads the quantized blocks directly, so eligible small-row projections avoid materializing a dense
+weight for the matrix-vector product. The kernel may produce small numerical differences because it quantizes the
+activation internally before the fused multiplication.
+
 ## Using Optimized CUDA Kernels with GGUF
 
 Optimized CUDA kernels can accelerate GGUF quantized model inference by approximately 10%. This functionality requires a compatible GPU with `torch.cuda.get_device_capability` greater than 7 and the kernels library:

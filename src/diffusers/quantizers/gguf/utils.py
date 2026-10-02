@@ -21,8 +21,11 @@ import torch
 import torch.nn as nn
 
 from ... import __version__
-from ...utils import is_accelerate_available, is_kernels_available, is_kernels_version
+from ...utils import is_accelerate_available, is_kernels_available, is_kernels_version, logging
 from ...utils.constants import DIFFUSERS_TRUST_REMOTE_KERNELS
+
+
+logger = logging.get_logger(__name__)
 
 
 if is_accelerate_available():
@@ -50,6 +53,32 @@ if can_use_cuda_kernels and is_kernels_available():
     ops = get_kernel("Isotr0py/ggml", user_agent={"diffusers": __version__}, **trust_kwargs)
 else:
     ops = None
+
+# New ggml-org kernels keep GGUF blocks packed and expose fused GEMV on both CUDA and MPS.
+# This path is opt-in and requires kernels>=0.17, while the legacy CUDA path above remains
+# available for users on older kernels releases.
+use_ggml_quantization_kernels = (
+    os.getenv("DIFFUSERS_GGUF_KERNELS", "false").lower() in ["1", "true", "yes"]
+    and is_kernels_available()
+    and is_kernels_version(">=", "0.17.0")
+)
+if use_ggml_quantization_kernels:
+    from kernels import get_kernel
+
+    try:
+        ggml_quantization_ops = get_kernel(
+            "ggml-org/ggml-quantization",
+            version=1,
+            user_agent={"diffusers": __version__},
+            trust_remote_code=DIFFUSERS_TRUST_REMOTE_KERNELS,
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Could not load ggml-org GGUF kernels (%s); falling back to the existing GGUF path.", error
+        )
+        ggml_quantization_ops = None
+else:
+    ggml_quantization_ops = None
 
 UNQUANTIZED_TYPES = {gguf.GGMLQuantizationType.F32, gguf.GGMLQuantizationType.F16, gguf.GGMLQuantizationType.BF16}
 STANDARD_QUANT_TYPES = {
@@ -604,9 +633,28 @@ class GGUFLinear(nn.Linear):
         self.device = device
 
     def forward(self, inputs: torch.Tensor):
+        if self._can_use_ggml_quantization_gemv(inputs):
+            return self.forward_ggml_quantization(inputs)
         if ops is not None and self.weight.is_cuda and inputs.is_cuda:
             return self.forward_cuda(inputs)
         return self.forward_native(inputs)
+
+    def _can_use_ggml_quantization_gemv(self, inputs: torch.Tensor) -> bool:
+        if ggml_quantization_ops is None or self.weight.device.type == "cpu" or inputs.device != self.weight.device:
+            return False
+        quant_type = int(self.weight.quant_type)
+        rows = inputs.numel() // self.in_features
+        return rows <= ggml_quantization_ops.MAX_GEMV_ROWS and quant_type in ggml_quantization_ops.GEMV_TYPES
+
+    def forward_ggml_quantization(self, inputs: torch.Tensor):
+        input_shape = inputs.shape
+        flat_inputs = inputs.reshape(-1, self.in_features).to(self.compute_dtype)
+        quant_type = int(self.weight.quant_type)
+        output = ggml_quantization_ops.mul_mat_vec(self.weight, flat_inputs, quant_type, self.out_features)
+        output = output.reshape(*input_shape[:-1], self.out_features).to(self.compute_dtype)
+        if self.bias is not None:
+            output += self.bias.to(self.compute_dtype)
+        return output
 
     def forward_native(self, inputs: torch.Tensor):
         weight = dequantize_gguf_tensor(self.weight)
