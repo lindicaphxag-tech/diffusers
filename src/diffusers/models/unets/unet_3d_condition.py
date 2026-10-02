@@ -181,9 +181,7 @@ class UNet3DConditionModel(ModelMixin, AttentionMixin, ConfigMixin, UNet2DCondit
             act_fn=act_fn,
             cond_proj_dim=time_cond_proj_dim,
         )
-        self.class_embedding = (
-            nn.Embedding(num_class_embeds, time_embed_dim) if num_class_embeds is not None else None
-        )
+        self.class_embedding = nn.Embedding(num_class_embeds, time_embed_dim) if num_class_embeds is not None else None
 
         self.transformer_in = TransformerTemporalModel(
             num_attention_heads=8,
