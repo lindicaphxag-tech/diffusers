@@ -45,14 +45,15 @@ COGVIDEOX_5B_TEACACHE_COEFFICIENTS = (
     7.97131516e00,
     -5.23162339e-02,
 )
-COGVIDEOX_15_5B_TEACACHE_COEFFICIENTS = (
+COGVIDEOX_5B_I2V_TEACACHE_COEFFICIENTS = COGVIDEOX_5B_TEACACHE_COEFFICIENTS
+COGVIDEOX1_5_5B_TEACACHE_COEFFICIENTS = (
     2.50210439e02,
     -1.65061612e02,
     3.57804877e01,
     -7.81551492e-01,
     3.58559703e-02,
 )
-COGVIDEOX_15_5B_I2V_TEACACHE_COEFFICIENTS = (
+COGVIDEOX1_5_5B_I2V_TEACACHE_COEFFICIENTS = (
     1.22842302e02,
     -1.04088754e02,
     2.62981677e01,
@@ -224,10 +225,14 @@ class TeaCacheHeadHook(ModelHook):
         if should_compute:
             return self.fn_ref.original_forward(*args, **kwargs)
 
-        cached_hidden = hidden_states + state.previous_hidden_residual.to(hidden_states.device)
+        cached_hidden = hidden_states + state.previous_hidden_residual.to(
+            device=hidden_states.device, dtype=hidden_states.dtype
+        )
         cached_encoder = encoder_hidden_states
         if encoder_hidden_states is not None:
-            cached_encoder = encoder_hidden_states + state.previous_encoder_residual.to(encoder_hidden_states.device)
+            cached_encoder = encoder_hidden_states + state.previous_encoder_residual.to(
+                device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
+            )
         return _build_output(self._metadata, cached_hidden, cached_encoder)
 
     def reset_state(self, module):
@@ -306,6 +311,19 @@ def apply_tea_cache(module: torch.nn.Module, config: TeaCacheConfig) -> None:
     state_manager = StateManager(TeaCacheState, (), {})
     head = blocks[0]
     tail = blocks[-1]
+
+    for block in blocks:
+        metadata = TransformerBlockRegistry.get(unwrap_module(block).__class__)
+        if metadata.return_encoder_hidden_states_index is None:
+            raise ValueError(
+                "TeaCache currently requires a dual-stream transformer block that returns both hidden and encoder states."
+            )
+        try:
+            metadata._get_parameter_from_args_kwargs("temb", (), {})
+        except (IndexError, ValueError):
+            # The helper cannot resolve a positional argument without a runtime call, so inspect the registered class.
+            if "temb" not in metadata._cls.forward.__code__.co_varnames:
+                raise ValueError("TeaCache requires transformer blocks with a timestep embedding argument named 'temb'.")
 
     head_registry = HookRegistry.check_if_exists_or_initialize(head)
     head_registry.register_hook(TeaCacheHeadHook(state_manager, config), _TEA_CACHE_LEADER_BLOCK_HOOK)
