@@ -168,12 +168,14 @@ class CogView4AttnProcessor:
         if attention_mask is not None:
             text_attn_mask = attention_mask
             assert text_attn_mask.dim() == 2, "the shape of text_attn_mask should be (batch_size, text_seq_length)"
-            text_attn_mask = text_attn_mask.float().to(query.device)
-            mix_attn_mask = torch.ones((batch_size, text_seq_length + image_seq_length), device=query.device)
-            mix_attn_mask[:, :text_seq_length] = text_attn_mask
-            mix_attn_mask = mix_attn_mask.unsqueeze(2)
-            attn_mask_matrix = mix_attn_mask @ mix_attn_mask.transpose(1, 2)
-            attention_mask = (attn_mask_matrix > 0).unsqueeze(1).to(query.dtype)
+            text_attn_mask = text_attn_mask.to(device=query.device, dtype=torch.bool)
+            joint_token_mask = torch.ones(
+                (batch_size, text_seq_length + image_seq_length), dtype=torch.bool, device=query.device
+            )
+            joint_token_mask[:, :text_seq_length] = text_attn_mask
+            attention_mask = (
+                joint_token_mask.unsqueeze(2) & joint_token_mask.unsqueeze(1)
+            ).unsqueeze(1)
 
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False

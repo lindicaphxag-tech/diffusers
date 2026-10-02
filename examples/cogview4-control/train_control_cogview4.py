@@ -1052,7 +1052,7 @@ def main(args):
                     truncation=True,
                     add_special_tokens=True,
                     return_tensors="pt",
-                ).attention_mask.float()
+                ).attention_mask
 
                 pixel_latents = encode_images(batch["pixel_values"], vae.to(accelerator.device), weight_dtype)
                 control_latents = encode_images(
@@ -1098,6 +1098,7 @@ def main(args):
                         prompt_embeds,
                         pooled_prompt_embeds,
                     ) = text_encoding_pipeline.encode_prompt(captions, "")
+
                 original_size = (args.resolution, args.resolution)
                 original_size = torch.tensor([original_size], dtype=prompt_embeds.dtype, device=prompt_embeds.device)
 
@@ -1112,8 +1113,28 @@ def main(args):
                 # this could be optimized by not having to do any text encoding and just
                 # doing zeros on specified shapes for `prompt_embeds` and `pooled_prompt_embeds`
                 if args.proportion_empty_prompts and random.random() < args.proportion_empty_prompts:
-                    # Here, we directly pass 16 pad tokens from pooled_prompt_embeds to prompt_embeds.
+                    # Here, we directly pass the empty-prompt embeddings returned as the negative prompt branch.
                     prompt_embeds = pooled_prompt_embeds
+                    attention_mask = tokenizer(
+                        [""] * len(batch["captions"]),
+                        padding="longest",
+                        max_length=args.max_sequence_length,
+                        truncation=True,
+                        add_special_tokens=True,
+                        return_tensors="pt",
+                    ).attention_mask
+
+                if attention_mask.shape[1] > prompt_embeds.shape[1]:
+                    raise ValueError(
+                        "Tokenizer attention mask is longer than CogView4 prompt embeddings: "
+                        f"{attention_mask.shape[1]} > {prompt_embeds.shape[1]}"
+                    )
+                if attention_mask.shape[1] < prompt_embeds.shape[1]:
+                    pad_length = prompt_embeds.shape[1] - attention_mask.shape[1]
+                    attention_mask = torch.cat(
+                        [attention_mask.new_zeros((attention_mask.shape[0], pad_length)), attention_mask], dim=1
+                    )
+
                 if args.offload:
                     text_encoding_pipeline = text_encoding_pipeline.to("cpu")
                 # Predict.

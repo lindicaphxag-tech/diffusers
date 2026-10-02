@@ -90,7 +90,31 @@ class CogView4TransformerTesterConfig(BaseModelTesterConfig):
 
 
 class TestCogView4Transformer(CogView4TransformerTesterConfig, ModelTesterMixin):
-    pass
+    @torch.no_grad()
+    def test_attention_mask_blocks_padded_text_tokens(self):
+        model = self.model_class(**self.get_init_dict()).to(torch_device).eval()
+        inputs = self.get_dummy_inputs(batch_size=1)
+
+        attention_mask = torch.ones(
+            inputs["encoder_hidden_states"].shape[:2], dtype=torch.bool, device=torch_device
+        )
+        attention_mask[:, 0] = False
+
+        poisoned = inputs["encoder_hidden_states"].clone()
+        poisoned[:, 0] = 1_000_000.0
+        cleaned = inputs["encoder_hidden_states"].clone()
+        cleaned[:, 0] = 0.0
+
+        poisoned_output = model(
+            **{**inputs, "encoder_hidden_states": poisoned, "attention_mask": attention_mask},
+            return_dict=False,
+        )[0]
+        cleaned_output = model(
+            **{**inputs, "encoder_hidden_states": cleaned, "attention_mask": attention_mask},
+            return_dict=False,
+        )[0]
+
+        torch.testing.assert_close(poisoned_output, cleaned_output, atol=1e-5, rtol=1e-5)
 
 
 class TestCogView4TransformerMemory(CogView4TransformerTesterConfig, MemoryTesterMixin):
