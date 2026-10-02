@@ -15,8 +15,8 @@
 import pytest
 import torch
 
+from diffusers import TeaCacheConfig, apply_tea_cache
 from diffusers.hooks._helpers import TransformerBlockMetadata, TransformerBlockRegistry
-from diffusers.hooks.tea_cache import TeaCacheConfig, apply_tea_cache
 from diffusers.models.cache_utils import CacheMixin
 
 
@@ -122,6 +122,21 @@ def test_tea_cache_contexts_keep_independent_trajectories():
 
     # Each context sees its own first step, so both calls execute fully.
     assert [block.calls for block in model.transformer_blocks] == [2, 2]
+
+
+def test_tea_cache_cache_mixin_lifecycle():
+    model = DualStreamTransformer()
+    config = TeaCacheConfig(coefficients=(0.0,), threshold=1.0, num_inference_steps=3)
+
+    model.enable_cache(config)
+    assert model.is_cache_enabled
+    assert model.transformer_blocks[0]._diffusers_hook.get_hook("tea_cache_leader_block") is not None
+    assert model.transformer_blocks[1]._diffusers_hook.get_hook("tea_cache_block") is not None
+
+    model.disable_cache()
+    assert not model.is_cache_enabled
+    assert model.transformer_blocks[0]._diffusers_hook.get_hook("tea_cache_leader_block") is None
+    assert model.transformer_blocks[1]._diffusers_hook.get_hook("tea_cache_block") is None
 
 
 def test_tea_cache_requires_one_multi_block_stack():
