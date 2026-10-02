@@ -665,10 +665,13 @@ class QwenImage21Rope(nn.Module):
 
         pos_index = torch.arange(8192)
         neg_index = torch.arange(1024).flip(0) * -1 - 1
-        self.freqs = [
+        freqs = [
             torch.cat([self.rope_params(pos_index, dim, theta), self.rope_params(neg_index, dim, theta)], dim=0)
             for dim in axes_dim
         ]
+        self.register_buffer("frame_freqs", freqs[0], persistent=False)
+        self.register_buffer("height_freqs", freqs[1], persistent=False)
+        self.register_buffer("width_freqs", freqs[2], persistent=False)
 
     def rope_params(self, index: torch.Tensor, dim: int, theta: int = 10000) -> torch.Tensor:
         freqs = torch.outer(index, 1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float32).div(dim)))
@@ -677,7 +680,6 @@ class QwenImage21Rope(nn.Module):
     def forward(
         self, img_shapes: list[tuple[int, int, int]], image_pad_mask: torch.Tensor, device: torch.device
     ) -> torch.Tensor:
-        freqs = [freq.to(device) for freq in self.freqs]
         image_pad_mask = image_pad_mask.to(device=device, dtype=torch.bool)
 
         # Build frame positions without materializing the token mask as a Python list. Text tokens advance by one.
@@ -708,7 +710,14 @@ class QwenImage21Rope(nn.Module):
         height_index = torch.where(image_pad_mask, image_height_index[image_index], frame_index)
         width_index = torch.where(image_pad_mask, image_width_index[image_index], frame_index)
 
-        return torch.cat([freqs[0][frame_index], freqs[1][height_index], freqs[2][width_index]], dim=-1)
+        return torch.cat(
+            [
+                self.frame_freqs[frame_index],
+                self.height_freqs[height_index],
+                self.width_freqs[width_index],
+            ],
+            dim=-1,
+        )
 
 
 class QwenImage21Transformer2DModel(
