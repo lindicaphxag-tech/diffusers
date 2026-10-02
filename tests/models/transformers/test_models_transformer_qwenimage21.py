@@ -18,7 +18,7 @@ import torch
 from torch.nn.attention.flex_attention import create_mask
 
 from diffusers import QwenImage21Transformer2DModel
-from diffusers.models.transformers.transformer_qwenimage21 import build_qwenimage21_block_causal_mask
+from diffusers.models.transformers.transformer_qwenimage21 import QwenImage21Rope, build_qwenimage21_block_causal_mask
 from diffusers.utils.torch_utils import randn_tensor
 
 from ...testing_utils import enable_full_determinism, torch_device
@@ -215,6 +215,76 @@ class TestQwenImage21Transformer(QwenImage21TransformerTesterConfig, ModelTester
                 outputs.append(model(**inputs, kv_cache=kv_cache, kv_cache_mode="cached", return_dict=False)[0])
 
         torch.testing.assert_close(outputs[0], outputs[1])
+
+
+class TestQwenImage21Rope:
+    @staticmethod
+    def _layout():
+        # text, two adjacent condition images, text, target image
+        img_shapes = [(1, 2, 2), (1, 1, 3), (1, 2, 3)]
+        image_pad_mask = torch.tensor(
+            [False, False] + [True] * 4 + [True] * 3 + [False] + [True] * 6 + [False],
+            dtype=torch.bool,
+        )
+        return img_shapes, image_pad_mask
+
+    @staticmethod
+    def _reference_indices(img_shapes, image_pad_mask):
+        frame_index = []
+        image_height_index = []
+        image_width_index = []
+        cursor, position = 0, 0
+        is_image_token = image_pad_mask.tolist()
+
+        for _, height, width in img_shapes:
+            block_start = is_image_token.index(True, cursor)
+            text_len = block_start - cursor
+            frame_index.extend(range(position, position + text_len))
+            position += text_len
+
+            cursor = block_start + height * width
+            frame_index.extend([position] * (height * width))
+            position += max(height, width)
+
+            image_height_index.extend([h for h in range(-(height - height // 2), height // 2) for _ in range(width)])
+            image_width_index.extend([w for _ in range(height) for w in range(-(width - width // 2), width // 2)])
+
+        if cursor < image_pad_mask.shape[-1]:
+            frame_index.extend(range(position, position + image_pad_mask.shape[-1] - cursor))
+
+        frame_index = torch.tensor(frame_index, dtype=torch.long)
+        height_index = frame_index.clone()
+        width_index = frame_index.clone()
+        height_index[image_pad_mask] = torch.tensor(image_height_index, dtype=torch.long)
+        width_index[image_pad_mask] = torch.tensor(image_width_index, dtype=torch.long)
+        return frame_index, height_index, width_index
+
+    def test_tensor_rope_matches_reference_layout(self):
+        img_shapes, image_pad_mask = self._layout()
+        rope = QwenImage21Rope(theta=10_000, axes_dim=[4, 6, 6])
+
+        output = rope(img_shapes, image_pad_mask, torch.device("cpu"))
+        frame_index, height_index, width_index = self._reference_indices(img_shapes, image_pad_mask)
+        expected = torch.cat(
+            [
+                rope.freqs[0][frame_index],
+                rope.freqs[1][height_index],
+                rope.freqs[2][width_index],
+            ],
+            dim=-1,
+        )
+
+        torch.testing.assert_close(output, expected)
+
+    def test_rope_compiles_as_fullgraph(self):
+        img_shapes, image_pad_mask = self._layout()
+        rope = QwenImage21Rope(theta=10_000, axes_dim=[4, 6, 6])
+        expected = rope(img_shapes, image_pad_mask, torch.device("cpu"))
+
+        compiled_rope = torch.compile(rope, backend="eager", fullgraph=True)
+        actual = compiled_rope(img_shapes, image_pad_mask, torch.device("cpu"))
+
+        torch.testing.assert_close(actual, expected)
 
 
 class TestQwenImage21BlockCausalMask:
