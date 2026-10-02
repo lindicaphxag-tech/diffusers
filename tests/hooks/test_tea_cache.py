@@ -15,7 +15,7 @@
 import pytest
 import torch
 
-from diffusers import TeaCacheConfig, apply_tea_cache
+from diffusers import CogVideoXTransformer3DModel, TeaCacheConfig, apply_tea_cache
 from diffusers.hooks._helpers import TransformerBlockMetadata, TransformerBlockRegistry
 from diffusers.models.cache_utils import CacheMixin
 
@@ -137,6 +137,69 @@ def test_tea_cache_cache_mixin_lifecycle():
     assert not model.is_cache_enabled
     assert model.transformer_blocks[0]._diffusers_hook.get_hook("tea_cache_leader_block") is None
     assert model.transformer_blocks[1]._diffusers_hook.get_hook("tea_cache_block") is None
+
+
+@torch.no_grad()
+def test_tea_cache_runs_on_tiny_cogvideox():
+    model = CogVideoXTransformer3DModel(
+        num_attention_heads=2,
+        attention_head_dim=8,
+        in_channels=4,
+        out_channels=4,
+        time_embed_dim=2,
+        text_embed_dim=8,
+        num_layers=2,
+        sample_width=8,
+        sample_height=8,
+        sample_frames=8,
+        patch_size=2,
+        patch_size_t=None,
+        temporal_compression_ratio=4,
+        max_text_seq_length=8,
+    ).eval()
+    model.enable_cache(
+        TeaCacheConfig(
+            coefficients=(0.0,),
+            threshold=1.0,
+            num_inference_steps=3,
+        )
+    )
+
+    generator = torch.Generator("cpu").manual_seed(0)
+    hidden_states = torch.randn((1, 1, 4, 8, 8), generator=generator)
+    encoder_hidden_states = torch.randn((1, 8, 8), generator=generator)
+
+    with model.cache_context("trajectory"):
+        first = model(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            timestep=torch.tensor([900]),
+            return_dict=False,
+        )[0]
+        second = model(
+            hidden_states=hidden_states + 0.01,
+            encoder_hidden_states=encoder_hidden_states,
+            timestep=torch.tensor([500]),
+            return_dict=False,
+        )[0]
+
+        head_hook = model.transformer_blocks[0]._diffusers_hook.get_hook("tea_cache_leader_block")
+        state = head_hook.state_manager.get_state()
+        assert state.step_index == 2
+        assert state.should_compute is False
+
+        third = model(
+            hidden_states=hidden_states + 0.02,
+            encoder_hidden_states=encoder_hidden_states,
+            timestep=torch.tensor([100]),
+            return_dict=False,
+        )[0]
+
+    assert torch.isfinite(first).all()
+    assert torch.isfinite(second).all()
+    assert torch.isfinite(third).all()
+    assert state.step_index == 0
+    assert state.previous_hidden_residual is None
 
 
 def test_tea_cache_requires_one_multi_block_stack():
