@@ -207,6 +207,7 @@ else:
             "SeaCacheConfig",
             "SmoothedEnergyGuidanceConfig",
             "TaylorSeerCacheConfig",
+            "TeaCacheConfig",
             "TextKVCacheConfig",
             "apply_faster_cache",
             "apply_first_block_cache",
@@ -215,6 +216,7 @@ else:
             "apply_pyramid_attention_broadcast",
             "apply_sea_cache",
             "apply_taylorseer_cache",
+            "apply_tea_cache",
             "apply_text_kv_cache",
         ]
     )
