@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest import mock
-
 import pytest
 import torch
 from PIL import Image
@@ -150,17 +148,24 @@ class TestQwenImageEditPipeline(QwenImageEditPipelineTesterConfig, PipelineTeste
     def test_mm_token_type_ids_are_forwarded_to_text_encoder(self):
         pipe = self.pipeline_class(**self.get_dummy_components()).to(torch_device)
         inputs = self.get_dummy_inputs()
+        captured_kwargs = {}
 
-        text_encoder_forward = pipe.text_encoder.forward
-        with mock.patch.object(pipe.text_encoder, "forward", wraps=text_encoder_forward) as forward:
-            pipe._get_qwen_prompt_embeds(
+        def capture_text_encoder_inputs(module, args, kwargs):
+            captured_kwargs.update(kwargs)
+
+        hook = pipe.text_encoder.register_forward_pre_hook(capture_text_encoder_inputs, with_kwargs=True)
+        try:
+            prompt_embeds, prompt_embeds_mask = pipe._get_qwen_prompt_embeds(
                 prompt=inputs["prompt"],
                 image=inputs["image"],
                 device=torch_device,
             )
+        finally:
+            hook.remove()
 
-        assert "mm_token_type_ids" in forward.call_args.kwargs
-        assert forward.call_args.kwargs["mm_token_type_ids"] is not None
+        assert captured_kwargs["mm_token_type_ids"] is not None
+        assert torch.isfinite(prompt_embeds).all()
+        assert prompt_embeds_mask.shape == prompt_embeds.shape[:2]
 
     def test_inference_batch_single_identical(self):
         super().test_inference_batch_single_identical(batch_size=3, expected_max_diff=1e-1)
