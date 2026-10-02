@@ -538,7 +538,8 @@ class Cosmos2VideoToWorldPipeline(DiffusionPipeline):
                 of [Imagen Paper](https://huggingface.co/papers/2205.11487). Guidance scale is enabled by setting
                 `guidance_scale > 1`.
             fps (`int`, defaults to `16`):
-                The frames per second of the generated video.
+                The frames per second of the generated video. Cosmos-Predict2 checkpoints disable FPS modulation in
+                temporal rotary embeddings, so this value does not alter transformer conditioning.
             num_videos_per_prompt (`int`, *optional*, defaults to 1):
                 The number of images to generate per prompt.
             generator (`torch.Generator` or `list[torch.Generator]`, *optional*):
@@ -710,7 +711,7 @@ class Cosmos2VideoToWorldPipeline(DiffusionPipeline):
                     hidden_states=cond_latent,
                     timestep=cond_timestep,
                     encoder_hidden_states=prompt_embeds,
-                    fps=fps,
+                    fps=None,
                     condition_mask=cond_mask,
                     padding_mask=padding_mask,
                     return_dict=False,
@@ -729,7 +730,7 @@ class Cosmos2VideoToWorldPipeline(DiffusionPipeline):
                         hidden_states=uncond_latent,
                         timestep=uncond_timestep,
                         encoder_hidden_states=negative_prompt_embeds,
-                        fps=fps,
+                        fps=None,
                         condition_mask=uncond_mask,
                         padding_mask=padding_mask,
                         return_dict=False,
