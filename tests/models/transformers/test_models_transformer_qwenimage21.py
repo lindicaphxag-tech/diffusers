@@ -18,7 +18,10 @@ import torch
 from torch.nn.attention.flex_attention import create_mask
 
 from diffusers import QwenImage21Transformer2DModel
-from diffusers.models.transformers.transformer_qwenimage21 import build_qwenimage21_block_causal_mask
+from diffusers.models.transformers.transformer_qwenimage21 import (
+    QwenImage21Rope,
+    build_qwenimage21_block_causal_mask,
+)
 from diffusers.utils.torch_utils import randn_tensor
 
 from ...testing_utils import enable_full_determinism, torch_device
@@ -95,6 +98,47 @@ class QwenImage21TransformerTesterConfig(BaseModelTesterConfig):
             "img_shapes": [[(1, target_height, target_width)]] * batch_size,
             "img_mask": img_mask,
         }
+
+
+class TestQwenImage21Rope:
+    def test_positions_match_reference_layout(self):
+        rope = QwenImage21Rope(theta=10000, axes_dim=[4, 6, 6])
+        image_pad_mask = torch.tensor(
+            [False, False, True, True, True, True, False, True, True, False],
+            dtype=torch.bool,
+        )
+        img_shapes = [(1, 2, 2), (1, 1, 2)]
+
+        output = rope(img_shapes, image_pad_mask, torch.device("cpu"))
+
+        frame_index = torch.tensor([0, 1, 2, 2, 2, 2, 4, 5, 5, 7])
+        height_index = torch.tensor([0, 1, -1, -1, 0, 0, 4, -1, -1, 7])
+        width_index = torch.tensor([0, 1, -1, 0, -1, 0, 4, -1, 0, 7])
+        expected = torch.cat(
+            [
+                rope.freqs[0][frame_index],
+                rope.freqs[1][height_index],
+                rope.freqs[2][width_index],
+            ],
+            dim=-1,
+        )
+
+        torch.testing.assert_close(output, expected)
+
+    @pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile is unavailable")
+    def test_fullgraph_compile(self):
+        rope = QwenImage21Rope(theta=10000, axes_dim=[4, 6, 6])
+        image_pad_mask = torch.tensor(
+            [False, False, True, True, True, True, False, True, True, False],
+            dtype=torch.bool,
+        )
+        img_shapes = [(1, 2, 2), (1, 1, 2)]
+
+        reference = rope(img_shapes, image_pad_mask, torch.device("cpu"))
+        compiled_rope = torch.compile(rope, backend="eager", fullgraph=True)
+        compiled = compiled_rope(img_shapes, image_pad_mask, torch.device("cpu"))
+
+        torch.testing.assert_close(compiled, reference)
 
 
 class TestQwenImage21Transformer(QwenImage21TransformerTesterConfig, ModelTesterMixin):
