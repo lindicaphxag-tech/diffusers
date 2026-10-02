@@ -76,6 +76,7 @@ class CacheMixin:
             PyramidAttentionBroadcastConfig,
             SeaCacheConfig,
             TaylorSeerCacheConfig,
+            TeaCacheConfig,
             TextKVCacheConfig,
             apply_faster_cache,
             apply_first_block_cache,
@@ -83,6 +84,7 @@ class CacheMixin:
             apply_pyramid_attention_broadcast,
             apply_sea_cache,
             apply_taylorseer_cache,
+            apply_tea_cache,
             apply_text_kv_cache,
         )
 
@@ -105,6 +107,8 @@ class CacheMixin:
             apply_sea_cache(self, config)
         elif isinstance(config, TaylorSeerCacheConfig):
             apply_taylorseer_cache(self, config)
+        elif isinstance(config, TeaCacheConfig):
+            apply_tea_cache(self, config)
         else:
             raise ValueError(f"Cache config {type(config)} is not supported.")
 
@@ -124,6 +128,7 @@ class CacheMixin:
             PyramidAttentionBroadcastConfig,
             SeaCacheConfig,
             TaylorSeerCacheConfig,
+            TeaCacheConfig,
             TextKVCacheConfig,
         )
         from ..hooks.faster_cache import _FASTER_CACHE_BLOCK_HOOK, _FASTER_CACHE_DENOISER_HOOK
@@ -137,6 +142,7 @@ class CacheMixin:
             _SEA_CACHE_ROOT_HOOK,
         )
         from ..hooks.taylorseer_cache import _TAYLORSEER_CACHE_HOOK
+        from ..hooks.tea_cache import _TEA_CACHE_BLOCK_HOOK, _TEA_CACHE_LEADER_BLOCK_HOOK
         from ..hooks.text_kv_cache import _TEXT_KV_CACHE_BLOCK_HOOK, _TEXT_KV_CACHE_TRANSFORMER_HOOK
 
         if self._cache_config is None:
@@ -165,6 +171,9 @@ class CacheMixin:
             registry.remove_hook(_SEA_CACHE_ROOT_HOOK, recurse=True)
         elif isinstance(self._cache_config, TaylorSeerCacheConfig):
             registry.remove_hook(_TAYLORSEER_CACHE_HOOK, recurse=True)
+        elif isinstance(self._cache_config, TeaCacheConfig):
+            registry.remove_hook(_TEA_CACHE_LEADER_BLOCK_HOOK, recurse=True)
+            registry.remove_hook(_TEA_CACHE_BLOCK_HOOK, recurse=True)
         else:
             raise ValueError(f"Cache config {type(self._cache_config)} is not supported.")
 
