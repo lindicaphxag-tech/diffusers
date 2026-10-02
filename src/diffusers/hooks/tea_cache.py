@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import math
 from dataclasses import dataclass
 from typing import Sequence
@@ -318,12 +319,8 @@ def apply_tea_cache(module: torch.nn.Module, config: TeaCacheConfig) -> None:
             raise ValueError(
                 "TeaCache currently requires a dual-stream transformer block that returns both hidden and encoder states."
             )
-        try:
-            metadata._get_parameter_from_args_kwargs("temb", (), {})
-        except (IndexError, ValueError):
-            # The helper cannot resolve a positional argument without a runtime call, so inspect the registered class.
-            if "temb" not in metadata._cls.forward.__code__.co_varnames:
-                raise ValueError("TeaCache requires transformer blocks with a timestep embedding argument named 'temb'.")
+        if "temb" not in inspect.signature(metadata._cls.forward).parameters:
+            raise ValueError("TeaCache requires transformer blocks with a timestep embedding argument named 'temb'.")
 
     head_registry = HookRegistry.check_if_exists_or_initialize(head)
     head_registry.register_hook(TeaCacheHeadHook(state_manager, config), _TEA_CACHE_LEADER_BLOCK_HOOK)
