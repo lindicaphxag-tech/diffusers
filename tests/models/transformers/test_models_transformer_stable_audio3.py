@@ -225,10 +225,28 @@ class TestStableAudio3DiTModelBehavior(unittest.TestCase):
         self.assertEqual(low_precision.dtype, torch.float32)
         deltas = (low_precision[1:] - low_precision[:-1]).abs().sum(-1)
         self.assertTrue(bool(torch.all(deltas > 0)))
-        # Explicit model.to(bf16) rounds the *stored* frequency buffer;
-        # position construction is still precise, but full fp32 parity
-        # requires the protected from_pretrained loading path below.
-        self.assertLess((low_precision - reference).abs().max().item(), 0.6)
+        # Both the time positions and persistent inverse-frequency buffer
+        # retain their full fp32 precision after explicit dtype conversion.
+        self.assertEqual(self.model.rotary_pos_emb.inv_freq.dtype, torch.float32)
+        torch.testing.assert_close(low_precision, reference, rtol=0, atol=0)
+
+    def test_long_context_exact_phase_after_sequential_model_casts(self):
+        # A rounded bf16 inverse frequency can drift by about 0.4 radians
+        # over 4096 frames even when the time index itself is fp32.
+        length = 4096
+        expected = self.model.rotary_pos_emb(length, torch.device("cpu"))
+        expected_freq = self.model.rotary_pos_emb.inv_freq.clone()
+        for dtype in (torch.float16, torch.bfloat16, torch.float16):
+            self.model.to(dtype)
+            self.assertEqual(self.model.rotary_pos_emb.inv_freq.dtype, torch.float32)
+            torch.testing.assert_close(self.model.rotary_pos_emb.inv_freq, expected_freq, rtol=0, atol=0)
+            torch.testing.assert_close(
+                self.model.rotary_pos_emb(length, torch.device("cpu")), expected, rtol=0, atol=0
+            )
+        # .half() uses _apply as well, not just the Module.to entry point.
+        self.model.half()
+        self.assertEqual(self.model.rotary_pos_emb.inv_freq.dtype, torch.float32)
+        self.assertIn("rotary_pos_emb.inv_freq", self.model.state_dict())
 
     def test_fp32_phase_survives_mixed_precision_pretrained_reload(self):
         import tempfile
