@@ -215,6 +215,35 @@ class TestStableAudio3DiTModelBehavior(unittest.TestCase):
         self.assertEqual(self.model.memory_tokens.shape[0], TINY_CFG["num_memory_tokens"])
         self.assertEqual(self.model.memory_tokens.shape[1], TINY_CFG["embed_dim"])
 
+    def test_long_audio_rotary_positions_do_not_collapse_after_explicit_bf16_cast(self):
+        # bf16 represents every integer only through 256, so constructing the
+        # positions in the frequency buffer's dtype collapses hundreds of
+        # distinct frames in a two-minute audio sequence.
+        length = 1356
+        reference = self.model.rotary_pos_emb(length, torch.device("cpu"))
+        low_precision = self.model.to(torch.bfloat16).rotary_pos_emb(length, torch.device("cpu"))
+        self.assertEqual(low_precision.dtype, torch.float32)
+        deltas = (low_precision[1:] - low_precision[:-1]).abs().sum(-1)
+        self.assertTrue(bool(torch.all(deltas > 0)))
+        # Explicit model.to(bf16) rounds the *stored* frequency buffer;
+        # position construction is still precise, but full fp32 parity
+        # requires the protected from_pretrained loading path below.
+        self.assertLess((low_precision - reference).abs().max().item(), 0.6)
+
+    def test_fp32_phase_survives_mixed_precision_pretrained_reload(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as saved:
+            self.model.save_pretrained(saved)
+            for dtype in (torch.float16, torch.bfloat16):
+                loaded = StableAudio3DiTModel.from_pretrained(saved, torch_dtype=dtype)
+                self.assertEqual(loaded.rotary_pos_emb.inv_freq.dtype, torch.float32)
+                self.assertEqual(loaded.rotary_pos_emb(2110, torch.device("cpu")).dtype, torch.float32)
+                expected = self.model.rotary_pos_emb(2110, torch.device("cpu"))
+                actual = loaded.rotary_pos_emb(2110, torch.device("cpu"))
+                torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Structural parity with the released SA3 Medium checkpoint
