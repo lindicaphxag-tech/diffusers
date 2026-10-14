@@ -215,6 +215,53 @@ class TestStableAudio3DiTModelBehavior(unittest.TestCase):
         self.assertEqual(self.model.memory_tokens.shape[0], TINY_CFG["num_memory_tokens"])
         self.assertEqual(self.model.memory_tokens.shape[1], TINY_CFG["embed_dim"])
 
+    def test_long_audio_rotary_positions_do_not_collapse_after_explicit_bf16_cast(self):
+        # bf16 represents every integer only through 256, so constructing the
+        # positions in the frequency buffer's dtype collapses hundreds of
+        # distinct frames in a two-minute audio sequence.
+        length = 1356
+        reference = self.model.rotary_pos_emb(length, torch.device("cpu"))
+        low_precision = self.model.to(torch.bfloat16).rotary_pos_emb(length, torch.device("cpu"))
+        self.assertEqual(low_precision.dtype, torch.float32)
+        deltas = (low_precision[1:] - low_precision[:-1]).abs().sum(-1)
+        self.assertTrue(bool(torch.all(deltas > 0)))
+        # Both the time positions and persistent inverse-frequency buffer
+        # retain their full fp32 precision after explicit dtype conversion.
+        self.assertEqual(self.model.rotary_pos_emb.inv_freq.dtype, torch.float32)
+        torch.testing.assert_close(low_precision, reference, rtol=0, atol=0)
+
+    def test_long_context_exact_phase_after_sequential_model_casts(self):
+        # A rounded bf16 inverse frequency can drift by about 0.4 radians
+        # over 4096 frames even when the time index itself is fp32.
+        length = 4096
+        expected = self.model.rotary_pos_emb(length, torch.device("cpu"))
+        expected_freq = self.model.rotary_pos_emb.inv_freq.clone()
+        for dtype in (torch.float16, torch.bfloat16, torch.float16):
+            self.model.to(dtype)
+            self.assertEqual(self.model.rotary_pos_emb.inv_freq.dtype, torch.float32)
+            torch.testing.assert_close(self.model.rotary_pos_emb.inv_freq, expected_freq, rtol=0, atol=0)
+            torch.testing.assert_close(
+                self.model.rotary_pos_emb(length, torch.device("cpu")), expected, rtol=0, atol=0
+            )
+        # .half() uses _apply as well, not just the Module.to entry point.
+        self.model.half()
+        self.assertEqual(self.model.rotary_pos_emb.inv_freq.dtype, torch.float32)
+        self.assertIn("rotary_pos_emb.inv_freq", self.model.state_dict())
+
+    def test_fp32_phase_survives_mixed_precision_pretrained_reload(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as saved:
+            self.model.save_pretrained(saved)
+            for dtype in (torch.float16, torch.bfloat16):
+                loaded = StableAudio3DiTModel.from_pretrained(saved, torch_dtype=dtype)
+                self.assertEqual(loaded.rotary_pos_emb.inv_freq.dtype, torch.float32)
+                self.assertEqual(loaded.rotary_pos_emb(2110, torch.device("cpu")).dtype, torch.float32)
+                expected = self.model.rotary_pos_emb(2110, torch.device("cpu"))
+                actual = loaded.rotary_pos_emb(2110, torch.device("cpu"))
+                torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Structural parity with the released SA3 Medium checkpoint
