@@ -102,6 +102,26 @@ class StableAudio3RotaryEmbedding(nn.Module):
         # `transformer.rotary_pos_emb.inv_freq`.
         self.register_buffer("inv_freq", inv_freq, persistent=True)
 
+    def _apply(self, fn):
+        # nn.Module.to(dtype=...) casts buffers as well as weights. Simply
+        # converting the cast buffer back to fp32 cannot recover its original
+        # frequencies, and long audio multiplies that rounding error by t.
+        # Preserve the fp32 values across dtype changes while still honoring
+        # device moves and keeping the persistent checkpoint key unchanged.
+        original = self._buffers.get("inv_freq")
+        super()._apply(fn)
+        converted = self._buffers.get("inv_freq")
+        if (
+            original is not None
+            and converted is not None
+            and original.dtype == torch.float32
+            and converted.dtype != torch.float32
+        ):
+            self._buffers["inv_freq"] = (
+                original.to(device=converted.device) if original.device.type != "meta" else converted.float()
+            )
+        return self
+
     def forward(self, seq_len: int, device: torch.device) -> torch.Tensor:
         # Positions above 256/2048 are not consecutive in bf16/fp16. Always
         # construct the phase in fp32: otherwise adjacent audio frames acquire
