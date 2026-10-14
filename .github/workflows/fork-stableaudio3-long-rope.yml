@@ -1,0 +1,25 @@
+name: Verify StableAudio3 long-context RoPE precision
+on:
+  push:
+    branches: [fix/stableaudio3-long-context-rotary-fp32-20261014]
+    paths:
+      - src/diffusers/models/transformers/transformer_stable_audio3.py
+      - tests/models/transformers/test_models_transformer_stable_audio3.py
+      - .github/workflows/fork-stableaudio3-long-rope.yml
+  workflow_dispatch:
+permissions: { contents: read }
+jobs:
+  long-rope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: |
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e . pytest accelerate
+      - run: |
+          python -m pytest -q tests/models/transformers/test_models_transformer_stable_audio3.py -k "long_audio_rotary_positions or fp32_phase_survives or long_context_exact_phase_after_sequential_model_casts"
