@@ -92,3 +92,35 @@ def test_identity_keys_follow_collate_pixel_and_caption_order():
     torch.testing.assert_close(batch["pixel_values"][:, 0, 0, 0], torch.tensor([4.0, 1.0, 40.0, 10.0]))
     plain = collate(examples, with_prior_preservation=False)
     assert plain["sample_keys"].tolist() == [8, 2]
+
+
+
+def test_old_step_cache_mispairs_captions_under_permutation_but_identity_cache_does_not():
+    n = 11
+    batch_size = 3
+    # Mimic the original step-indexed cache traversal: batches occupy slots
+    # 0..num_batches-1 and are reused by step in a different shuffled epoch.
+    first_order = torch.randperm(n, generator=torch.Generator().manual_seed(11)).tolist()
+    old_step_cache = [first_order[i : i + batch_size] for i in range(0, n, batch_size)]
+    keyed_cache = {}
+    for original_id in first_order:
+        params = torch.tensor([[float(original_id), 0.0]])
+        cache_latent_distributions(keyed_cache, [2 * original_id], ToyGaussian(params, deterministic=True))
+    mismatched_old_pairs = 0
+    for seed in range(100):
+        epoch_order = torch.randperm(n, generator=torch.Generator().manual_seed(seed + 200)).tolist()
+        for batch_step, start in enumerate(range(0, n, batch_size)):
+            actual_ids = epoch_order[start : start + batch_size]
+            restored = sample_cached_latents(keyed_cache, [2 * i for i in actual_ids], ToyGaussian)
+            torch.testing.assert_close(restored[:, 0], torch.tensor(actual_ids, dtype=torch.float32))
+            stale_ids = old_step_cache[batch_step]
+            mismatched_old_pairs += sum(a != b for a, b in zip(actual_ids, stale_ids))
+    assert mismatched_old_pairs > 0
+
+
+def test_deterministic_distribution_preserves_mode_and_rejects_misaligned_batch():
+    cache = {}
+    with pytest.raises(ValueError, match="batch-aligned"):
+        cache_latent_distributions(cache, [1], ToyGaussian(torch.zeros(2, 2)))
+    cache_latent_distributions(cache, [9], ToyGaussian(torch.tensor([[2.0, 0.0]]), deterministic=True))
+    torch.testing.assert_close(sample_cached_latents(cache, [9, 9], ToyGaussian), torch.tensor([[2.0], [2.0]]))
