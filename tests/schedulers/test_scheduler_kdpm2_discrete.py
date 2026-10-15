@@ -29,6 +29,34 @@ class KDPM2DiscreteSchedulerTest(SchedulerCommonTest):
         for beta_start, beta_end in zip([0.00001, 0.0001, 0.001], [0.0002, 0.002, 0.02]):
             self.check_over_configs(beta_start=beta_start, beta_end=beta_end)
 
+    def test_sigma_interpolation_zero_endpoints_stay_finite(self):
+        # The schedule has a terminal sigma of zero. log(0).lerp(log(sigma))
+        # can yield NaN even before the solver performs its final update.
+        for schedule in (
+            {},
+            {"use_karras_sigmas": True},
+            {"use_exponential_sigmas": True},
+            {"use_beta_sigmas": True},
+        ):
+            scheduler = KDPM2DiscreteScheduler(**self.get_scheduler_config(**schedule))
+            scheduler.set_timesteps(30)
+            assert torch.isfinite(scheduler.sigmas_interpol).all()
+            assert scheduler.sigmas_interpol[0] == 0
+            assert scheduler.sigmas_interpol[-1] == 0
+            assert torch.isfinite(scheduler.timesteps).all()
+
+    def test_sigma_interpolation_reproduces_geometric_mean(self):
+        # The stable formulation must still be the geometric midpoint
+        # for strictly positive sigmas, including widely varying magnitudes.
+        sigmas = torch.tensor([80.0, 10.0, 1e-12, 0.0], dtype=torch.float32)
+        actual = sigmas.sqrt() * sigmas.roll(1).sqrt()
+        expected = torch.tensor(
+            [0.0, (80.0 * 10.0) ** 0.5, (10.0 * 1e-12) ** 0.5, 0.0],
+            dtype=torch.float32,
+        )
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, expected, rtol=2e-6, atol=1e-12)
+
     def test_schedules(self):
         for schedule in ["linear", "scaled_linear"]:
             self.check_over_configs(beta_schedule=schedule)

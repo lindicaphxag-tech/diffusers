@@ -324,7 +324,11 @@ class KDPM2DiscreteScheduler(SchedulerMixin, ConfigMixin):
         sigmas = torch.from_numpy(sigmas).to(device=device)
 
         # interpolate sigmas
-        sigmas_interpol = sigmas.log().lerp(sigmas.roll(1).log(), 0.5).exp()
+        # The geometric midpoint is sqrt(sigma_i * sigma_{i-1}). The
+        # log/lerp/exp form evaluates log(0) at the terminal sigma and can
+        # produce NaN from -inf + inf (notably on MPS). Taking square roots
+        # before multiplying also avoids overflowing intermediate products.
+        sigmas_interpol = sigmas.sqrt() * sigmas.roll(1).sqrt()
 
         self.sigmas = torch.cat([sigmas[:1], sigmas[1:].repeat_interleave(2), sigmas[-1:]])
         self.sigmas_interpol = torch.cat(
