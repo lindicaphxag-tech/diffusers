@@ -1,0 +1,30 @@
+name: SD3 cached-latent sample identity
+
+on:
+  push:
+    branches: [fix/sd3-dreambooth-latent-cache-sample-identity-20261015]
+  pull_request:
+    paths:
+      - "examples/dreambooth/indexed_latent_cache.py"
+      - "examples/dreambooth/test_indexed_latent_cache.py"
+      - "examples/dreambooth/train_dreambooth_lora_sd3.py"
+
+jobs:
+  cpu-sample-identity:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install CPU test dependencies
+        run: python -m pip install torch pytest
+      - name: Compile training script (without importing optional dependencies)
+        run: python -m py_compile examples/dreambooth/train_dreambooth_lora_sd3.py
+      - name: Test shuffled index, per-caption identity and stochastic latent sampling
+        run: python -m pytest -q -o addopts="" examples/dreambooth/test_indexed_latent_cache.py

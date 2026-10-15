@@ -52,6 +52,7 @@ from diffusers import (
     SD3Transformer2DModel,
     StableDiffusion3Pipeline,
 )
+from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import (
     _set_state_dict_into_text_encoder,
@@ -67,6 +68,7 @@ from diffusers.utils import (
 )
 from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
 from diffusers.utils.torch_utils import is_compiled_module
+from indexed_latent_cache import cache_latent_distributions, sample_cached_latents
 
 
 if is_wandb_available():
@@ -860,7 +862,7 @@ class DreamBoothDataset(Dataset):
         return self._length
 
     def __getitem__(self, index):
-        example = {}
+        example = {"sample_index": index}
         instance_image = self.pixel_values[index % self.num_instance_images]
         example["instance_images"] = instance_image
 
@@ -889,17 +891,20 @@ class DreamBoothDataset(Dataset):
 def collate_fn(examples, with_prior_preservation=False):
     pixel_values = [example["instance_images"] for example in examples]
     prompts = [example["instance_prompt"] for example in examples]
+    # Even/odd keys distinguish instance and class images at the same row.
+    sample_keys = [2 * example["sample_index"] for example in examples]
 
     # Concat class and instance examples for prior preservation.
     # We do this to avoid doing two forward passes.
     if with_prior_preservation:
         pixel_values += [example["class_images"] for example in examples]
         prompts += [example["class_prompt"] for example in examples]
+        sample_keys += [2 * example["sample_index"] + 1 for example in examples]
 
     pixel_values = torch.stack(pixel_values)
     pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
 
-    batch = {"pixel_values": pixel_values, "prompts": prompts}
+    batch = {"pixel_values": pixel_values, "prompts": prompts, "sample_keys": torch.tensor(sample_keys)}
     return batch
 
 
@@ -1590,13 +1595,14 @@ def main(args):
     vae_config_shift_factor = vae.config.shift_factor
     vae_config_scaling_factor = vae.config.scaling_factor
     if args.cache_latents:
-        latents_cache = []
+        latents_cache = {}
         for batch in tqdm(train_dataloader, desc="Caching latents"):
             with torch.no_grad():
                 batch["pixel_values"] = batch["pixel_values"].to(
                     accelerator.device, non_blocking=True, dtype=weight_dtype
                 )
-                latents_cache.append(vae.encode(batch["pixel_values"]).latent_dist)
+                latent_dist = vae.encode(batch["pixel_values"]).latent_dist
+                cache_latent_distributions(latents_cache, batch["sample_keys"].tolist(), latent_dist)
 
         if args.validation_prompt is None:
             del vae
@@ -1767,7 +1773,9 @@ def main(args):
 
                 # Convert images to latent space
                 if args.cache_latents:
-                    model_input = latents_cache[step].sample()
+                    model_input = sample_cached_latents(
+                        latents_cache, batch["sample_keys"].tolist(), DiagonalGaussianDistribution
+                    )
                 else:
                     pixel_values = batch["pixel_values"].to(dtype=vae.dtype)
                     model_input = vae.encode(pixel_values).latent_dist.sample()
