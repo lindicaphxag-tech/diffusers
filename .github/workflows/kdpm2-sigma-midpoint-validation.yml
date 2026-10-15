@@ -1,0 +1,29 @@
+name: KDPM2 sigma interpolation correctness
+
+on:
+  push:
+    branches: [fix/kdpm2-geometric-sigma-zero-endpoints-20261015]
+  pull_request:
+    paths:
+      - "src/diffusers/schedulers/scheduling_k_dpm_2_discrete.py"
+      - "tests/schedulers/test_scheduler_kdpm2_discrete.py"
+
+jobs:
+  endpoint-regressions:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch pytest pytest-mock
+          python -m pip install -e .
+      - name: Run KDPM2 sigma endpoint regressions
+        run: python -m pytest -q tests/schedulers/test_scheduler_kdpm2_discrete.py -k sigma_interpolation
